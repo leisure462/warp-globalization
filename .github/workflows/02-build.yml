@@ -54,7 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
-      upstream_ref: ${{ steps.upstream.outputs.ref }}
+      upstream_ref: ${{ steps.upstream.outputs.sha }}
+      source_ref: ${{ steps.upstream.outputs.source_ref }}
       version: ${{ steps.upstream.outputs.version }}
       lang: ${{ steps.vars.outputs.lang }}
       platform: ${{ steps.vars.outputs.platform }}
@@ -71,6 +72,7 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             UPSTREAM_REF="${{ github.event.client_payload.upstream_ref }}"
+            SOURCE_REF="${{ github.event.client_payload.source_ref }}"
             VERSION="${{ github.event.client_payload.version }}"
             LANG="${{ github.event.client_payload.lang }}"
             PLATFORM="${{ github.event.client_payload.platform }}"
@@ -78,6 +80,7 @@ jobs:
             BUILD_INSTALLER="${{ github.event.client_payload.build_installer }}"
           else
             UPSTREAM_REF="${{ inputs.upstream_ref }}"
+            SOURCE_REF="$UPSTREAM_REF"
             VERSION=""
             LANG="${{ inputs.lang }}"
             PLATFORM="${{ inputs.platform }}"
@@ -89,6 +92,7 @@ jobs:
           PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
           BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
           echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
+          echo "source_ref=${SOURCE_REF:-$UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "lang=$LANG" >> "$GITHUB_OUTPUT"
           echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
@@ -109,11 +113,15 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ steps.vars.outputs.upstream_ref }}"
+          SOURCE_REF="${{ steps.vars.outputs.source_ref }}"
           if [ "$REF" = "main" ] \
             && ! git ls-remote --exit-code --heads "$WARP_REPO" main >/dev/null 2>&1 \
             && git ls-remote --exit-code --heads "$WARP_REPO" master >/dev/null 2>&1; then
             echo "::warning::Warp upstream has no main branch; falling back to master."
             REF="master"
+            if [ "$SOURCE_REF" = "main" ]; then
+              SOURCE_REF="master"
+            fi
           fi
           git clone --filter=blob:none "$WARP_REPO" warp
           cd warp
@@ -121,6 +129,7 @@ jobs:
             git fetch --depth 1 origin "$REF"
             git checkout FETCH_HEAD
           }
+          FULL_SHA="$(git rev-parse HEAD)"
           SHA="$(git rev-parse --short=12 HEAD)"
           VERSION="${{ steps.vars.outputs.version }}"
           if [ -z "$VERSION" ]; then
@@ -131,8 +140,10 @@ jobs:
             VERSION="${VERSION//\//-}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "source_ref=${SOURCE_REF:-$REF}" >> "$GITHUB_OUTPUT"
 
       - name: Get translation data
         shell: bash
@@ -394,7 +405,8 @@ jobs:
           body: |
             Warp OSS localized build.
 
-            Upstream ref: ${{ needs.prepare.outputs.upstream_ref }}
+            Upstream ref: ${{ needs.prepare.outputs.source_ref }}
+            Upstream commit: ${{ needs.prepare.outputs.upstream_ref }}
             Language: ${{ needs.prepare.outputs.lang }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

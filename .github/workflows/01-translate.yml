@@ -88,6 +88,7 @@ jobs:
             git fetch --depth 1 origin "$REF"
             git checkout FETCH_HEAD
           }
+          FULL_SHA="$(git rev-parse HEAD)"
           SHA="$(git rev-parse --short=12 HEAD)"
           VERSION="$REF"
           if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
@@ -95,7 +96,8 @@ jobs:
           fi
           VERSION="${VERSION//\//-}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Using Warp $REF ($SHA), localization version $VERSION"
 
@@ -199,7 +201,8 @@ jobs:
         run: |
           gh api repos/${{ github.repository }}/dispatches \
             -f event_type=build-ready \
-            -f "client_payload[upstream_ref]=${{ steps.upstream.outputs.ref }}" \
+            -f "client_payload[upstream_ref]=${{ steps.upstream.outputs.sha }}" \
+            -f "client_payload[source_ref]=${{ steps.upstream.outputs.ref }}" \
             -f "client_payload[version]=${{ steps.upstream.outputs.version }}" \
             -f "client_payload[lang]=${{ inputs.target_lang }}" \
             -f "client_payload[platform]=${{ inputs.build_platform }}" \

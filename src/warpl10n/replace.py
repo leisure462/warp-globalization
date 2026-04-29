@@ -21,6 +21,9 @@ PROTECTED_RE = re.compile(
     r'|#\[(?!error\b)[\w:]+\([^]]*?\)\]',
     re.DOTALL,
 )
+PROTECTED_BLOCK_MARKERS = (
+    "impl FromStr for SettingsSection",
+)
 ZH_PUNCT_BETWEEN_STRINGS_RE = re.compile(r'(?<=\w")\s*[、，]\s*(?=")')
 ZH_SEMICOLON_BETWEEN_STRINGS_RE = re.compile(r'(?<=\w")\s*[；]\s*(?=")')
 RUST_ESCAPES = frozenset('nrtx0u\\"\'')
@@ -77,7 +80,38 @@ def _escape_for_rust(value: str) -> str:
 
 
 def _protected_ranges(content: str) -> list[tuple[int, int]]:
-    return [(match.start(), match.end()) for match in PROTECTED_RE.finditer(content)]
+    ranges = [(match.start(), match.end()) for match in PROTECTED_RE.finditer(content)]
+    ranges.extend(_protected_block_ranges(content))
+    return ranges
+
+
+def _protected_block_ranges(content: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for marker in PROTECTED_BLOCK_MARKERS:
+        search_from = 0
+        while True:
+            marker_pos = content.find(marker, search_from)
+            if marker_pos == -1:
+                break
+            open_brace = content.find("{", marker_pos)
+            if open_brace == -1:
+                break
+            depth = 0
+            end = None
+            for idx in range(open_brace, len(content)):
+                ch = content[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = idx + 1
+                        break
+            if end is None:
+                break
+            ranges.append((marker_pos, end))
+            search_from = end
+    return ranges
 
 
 def _replace_outside_ranges(content: str, old: str, new: str, ranges: list[tuple[int, int]]) -> tuple[str, int]:
@@ -168,4 +202,3 @@ def run_replace(input_path: str | Path, source_root: str | Path, do_not_translat
         load_do_not_translate(do_not_translate)
     translations: TranslationDict = load_json(input_path)
     return replace_in_source(translations, source_root)
-

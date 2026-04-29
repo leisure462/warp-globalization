@@ -216,6 +216,7 @@ jobs:
         with:
           target_os: windows
           is_self_hosted: "false"
+          install_release_deps: "true"
 
       - name: Build Warp OSS
         shell: bash
@@ -285,6 +286,7 @@ jobs:
         with:
           target_os: linux
           is_self_hosted: "false"
+          install_release_deps: "true"
 
       - name: Build Warp OSS
         id: bundle
@@ -345,6 +347,7 @@ jobs:
         with:
           target_os: macos
           is_self_hosted: "false"
+          install_release_deps: "true"
 
       - name: Build Warp OSS
         id: bundle

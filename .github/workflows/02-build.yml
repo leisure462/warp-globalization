@@ -246,6 +246,10 @@ jobs:
             --input "$TRANS_FILE" \
             --source-root warp \
             --do-not-translate config/do_not_translate.json
+          warpl10n patch-update \
+            --source-root warp \
+            --repo "${{ github.repository }}" \
+            --lang "${{ steps.vars.outputs.lang }}"
           git -C warp diff --binary > l10n.patch
           if [ ! -s l10n.patch ]; then
             echo "::warning::Localization patch is empty."
@@ -620,5 +624,6 @@ jobs:
             ## Windows 安装说明
             - `*-setup-*.exe`: 安装包，会安装 `warp-oss.exe` 和运行时资源。
             - `*-portable-*.zip`: 免安装包，解压整个 zip 后运行 `warp-oss.exe`。不要只复制 exe，必须保留同级 `resources\` 目录和其它运行时文件。
+            - 安装版的内部更新检查会读取本仓库最新 Release，并下载对应的 `*-setup-*.exe` 安装包。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

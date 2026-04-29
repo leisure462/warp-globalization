@@ -20,10 +20,23 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
    - 默认构建 `windows-x86_64`
    - 产物会上传为 Actions Artifact
    - `publish_release` 默认开启，Release tag/name 使用上游 release 名称
+   - Windows 安装版会把软件内置更新检查源改为本仓库 Release，并从本仓库 Release assets 下载新版安装包
 
 翻译结果会提交到仓库的 `i18n` 分支，主分支只保存工具链和 Actions 配置。
 每次翻译都会同时维护 `i18n/<版本>/<语言>.json` 和 `i18n/<语言>.json`。后者作为跨版本翻译记忆，新 upstream commit 没有精确版本翻译时会自动复用它，只补翻新增或变更的字符串。
 `01 Translate` 也会按计划定时检查 Warp 最新 release；如果本仓库已经存在同名 Release，就会跳过本次翻译和构建，避免重复发布。
+
+## 安装版内部更新
+
+`02 Build` 在生成源码补丁前会执行 `warpl10n patch-update`，把 Warp OSS 的 Windows 更新逻辑改为：
+
+- 启用 OSS Windows bundle 的 `autoupdate` 与更新 UI feature
+- 查询 `https://api.github.com/repos/<本仓库>/releases/latest`
+- 使用最新 Release tag 和当前软件内置版本比较
+- 从 `https://github.com/<本仓库>/releases/download/<tag>/warp-<语言>-windows-x86_64-setup-<tag>.exe` 下载安装包
+- 复用 Warp 原有 Windows 更新安装流程执行新版安装器
+
+这个能力只针对安装版。免安装 zip 仍然需要用户手动下载并保持 `resources\` 目录结构。
 
 ## 本地命令
 
@@ -35,6 +48,7 @@ git clone https://github.com/warpdotdev/warp.git warp
 warpl10n extract --source-root warp --scan-mode heuristic
 warpl10n translate --input string.json --output i18n/zh-CN.json --context string_context.json
 warpl10n replace --input i18n/zh-CN.json --source-root warp --do-not-translate config/do_not_translate.json
+warpl10n patch-update --source-root warp --repo leisure462/warp-globalization --lang zh-CN
 ```
 
 ## 工作流

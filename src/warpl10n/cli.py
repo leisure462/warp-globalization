@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_select.add_argument("--version", required=True)
     p_select.add_argument("--lang", default="zh-CN")
 
+    p_patch_update = sub.add_parser("patch-update", help="patch Warp OSS autoupdate source")
+    p_patch_update.add_argument("--source-root", required=True)
+    p_patch_update.add_argument("--repo", default="leisure462/warp-globalization")
+    p_patch_update.add_argument("--lang", default="zh-CN")
+
     return parser
 
 
@@ -128,6 +133,17 @@ def main() -> None:
         if not selected:
             raise SystemExit(f"no translation file found for {args.version} {args.lang}")
         print(selected.as_posix())
+
+    elif args.command == "patch-update":
+        from .patch_update import run_patch_update
+
+        changed = run_patch_update(args.source_root, args.repo, args.lang)
+        if changed:
+            print("patched Warp update source:")
+            for path in changed:
+                print(path.as_posix())
+        else:
+            print("Warp update source already patched")
 
 
 if __name__ == "__main__":

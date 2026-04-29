@@ -297,6 +297,7 @@ jobs:
           install_release_deps: "true"
 
       - name: Build Warp OSS
+        id: bundle
         shell: bash
         working-directory: warp
         env:
@@ -309,44 +310,101 @@ jobs:
             ./script/bundle --channel oss --nouniversal --release-tag "${{ needs.prepare.outputs.version }}" --skip-build-installer
           fi
 
-      - name: Package Windows artifact
+      - name: Package Windows artifacts
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $ErrorActionPreference = "Stop"
+          $version = "${{ needs.prepare.outputs.version }}"
+          $lang = "${{ needs.prepare.outputs.lang }}"
+          $portableDir = "dist\portable"
+          $releaseDir = "release-dist"
+          New-Item -ItemType Directory -Force -Path $portableDir, $releaseDir | Out-Null
 
-          # ── 1. 找到 warp-oss.exe ──────────────────────────────────────────
+          # 1. Locate the built executable and its target profile directory.
           $exe = Get-ChildItem -Path .\warp\target -Recurse -Filter "warp-oss.exe" |
             Where-Object { $_.FullName -match "rlto" } |
             Select-Object -First 1
           if (-not $exe) { throw "warp-oss.exe not found" }
-          Copy-Item $exe.FullName "dist\warp-oss.exe"
-          Write-Host "Copied executable: $($exe.FullName)"
+          $profileDir = Split-Path -Parent $exe.FullName
+          Write-Host "Found executable: $($exe.FullName)"
+          Write-Host "Target profile directory: $profileDir"
 
-          # ── 2. 复制 resources/ 目录（Warp 启动必需）────────────────────────
-          # bundle 脚本在 exe 同级生成 resources\bundled\metadata\version.json
-          # 以及 resources\settings_schema.json 等文件，运行时必须存在。
-          $exeDir      = Split-Path -Parent $exe.FullName
-          $resourcesDir = Join-Path $exeDir "resources"
-          if (Test-Path $resourcesDir) {
-            Copy-Item $resourcesDir "dist\resources" -Recurse -Force
-            Write-Host "Copied resources directory from: $resourcesDir"
-            Get-ChildItem "dist\resources" -Recurse | Select-Object FullName | ForEach-Object { Write-Host "  + $($_.FullName)" }
+          # 2. Ensure resources exist even when bundle was run with --skip-build-installer.
+          $resourcesDir = Join-Path $profileDir "resources"
+          if (-not (Test-Path $resourcesDir)) {
+            Write-Host "resources/ not found beside executable; preparing bundled resources now."
+            & ".\warp\script\windows\prepare_bundled_resources.ps1" `
+              -DestinationDir $resourcesDir `
+              -Channel "oss" `
+              -CargoProfile "rlto"
+          }
+
+          $requiredResources = @(
+            (Join-Path $resourcesDir "bundled\metadata\version.json"),
+            (Join-Path $resourcesDir "settings_schema.json"),
+            (Join-Path $resourcesDir "THIRD_PARTY_LICENSES.txt")
+          )
+          foreach ($path in $requiredResources) {
+            if (-not (Test-Path $path)) {
+              throw "Required runtime resource is missing: $path"
+            }
+          }
+          Write-Host "Verified bundled resources:"
+          Get-ChildItem $resourcesDir -Recurse | Select-Object FullName | ForEach-Object { Write-Host "  + $($_.FullName)" }
+
+          # 3. Build a portable runtime directory that mirrors the installer layout.
+          Copy-Item $exe.FullName (Join-Path $portableDir "warp-oss.exe") -Force
+          Copy-Item $resourcesDir (Join-Path $portableDir "resources") -Recurse -Force
+
+          $windowsAssets = ".\warp\app\assets\windows\x64"
+          $runtimeFiles = @(
+            "conpty.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "msvcp140.dll",
+            "dxcompiler.dll",
+            "dxil.dll"
+          )
+          foreach ($file in $runtimeFiles) {
+            $source = Join-Path $windowsAssets $file
+            if (Test-Path $source) {
+              Copy-Item $source (Join-Path $portableDir $file) -Force
+            } else {
+              Write-Warning "Optional runtime file not found: $source"
+            }
+          }
+
+          $openConsole = Join-Path $windowsAssets "OpenConsole.exe"
+          if (Test-Path $openConsole) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $portableDir "x64") | Out-Null
+            Copy-Item $openConsole (Join-Path $portableDir "x64\OpenConsole.exe") -Force
           } else {
-            Write-Warning "resources/ directory not found at $resourcesDir — app may fail to start!"
+            Write-Warning "Optional OpenConsole.exe not found: $openConsole"
           }
 
-          # ── 3. 如果构建了 INNO 安装包，也一并打包 ────────────────────────
-          if (Test-Path ".\warp\script\windows\Output") {
-            Copy-Item ".\warp\script\windows\Output\*.exe" "dist\" -ErrorAction SilentlyContinue
-            Write-Host "Copied installer exe(s) from script\windows\Output"
+          $icon = ".\warp\app\channels\oss\icon\no-padding\icon.ico"
+          if (Test-Path $icon) {
+            Copy-Item $icon (Join-Path $portableDir "icon.ico") -Force
           }
 
-          # ── 4. 写入使用说明 ───────────────────────────────────────────────
+          $bootstrap = ".\warp\app\assets\bundled\bootstrap\pwsh.ps1"
+          if (Test-Path $bootstrap) {
+            Copy-Item $bootstrap (Join-Path $portableDir "pwsh.ps1") -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $portableDir "bin") | Out-Null
+          $cmd = @(
+            "@echo off"
+            'set "WARP_CLI_MODE=1"'
+            '"%~dp0..\warp-oss.exe" %*'
+          )
+          $cmd | Set-Content -Encoding ASCII (Join-Path $portableDir "bin\warp-oss.cmd")
+
           $readme = @(
             "# Warp OSS 汉化版 - 使用说明"
             ""
             "## 运行方法"
-            "将整个 dist 目录中的所有文件解压到同一文件夹，保持目录结构："
+            "解压整个 zip 到同一文件夹，保持目录结构："
             "  warp-oss.exe"
             "  resources\"
             "    bundled\"
@@ -364,16 +422,36 @@ jobs:
             "- 若仍无法启动，请检查是否安装了 Visual C++ Redistributable (x64)"
             "  下载地址: https://aka.ms/vs/17/release/vc_redist.x64.exe"
           )
-          $readme | Set-Content -Encoding UTF8 "dist\README.txt"
+          $readme | Set-Content -Encoding UTF8 (Join-Path $portableDir "README.txt")
 
-          Compress-Archive -Path "dist\*" -DestinationPath "warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip" -Force
-          Write-Host "Package created successfully."
+          $portableZip = "warp-$lang-windows-x86_64-portable-$version.zip"
+          Compress-Archive -Path "$portableDir\*" -DestinationPath (Join-Path $releaseDir $portableZip) -Force
+          Write-Host "Portable package created: $portableZip"
+
+          # 4. Copy the native installer as a separate release asset when it exists.
+          $installerPath = "${{ steps.bundle.outputs.installer_path }}"
+          if (-not $installerPath -or -not (Test-Path $installerPath)) {
+            $installer = Get-ChildItem -Path ".\warp\script\windows\Output" -Filter "*.exe" -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if ($installer) {
+              $installerPath = $installer.FullName
+            }
+          }
+
+          if ("${{ needs.prepare.outputs.build_installer }}" -eq "true") {
+            if (-not $installerPath -or -not (Test-Path $installerPath)) {
+              throw "build_installer=true but no Windows installer executable was found."
+            }
+            $installerName = "warp-$lang-windows-x86_64-setup-$version.exe"
+            Copy-Item $installerPath (Join-Path $releaseDir $installerName) -Force
+            Write-Host "Installer package copied: $installerName"
+          }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
           name: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64
-          path: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip
+          path: release-dist/*
 
   build-linux-x86_64:
     name: Build Linux x64
@@ -540,7 +618,7 @@ jobs:
             Language: ${{ needs.prepare.outputs.lang }}
 
             ## Windows 安装说明
-            解压 zip 后，将所有文件（包括 `resources\` 目录）放在同一目录下运行 `warp-oss.exe`。
-            详见压缩包内的 `README.txt`。
+            - `*-setup-*.exe`: 安装包，会安装 `warp-oss.exe` 和运行时资源。
+            - `*-portable-*.zip`: 免安装包，解压整个 zip 后运行 `warp-oss.exe`。不要只复制 exe，必须保留同级 `resources\` 目录和其它运行时文件。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

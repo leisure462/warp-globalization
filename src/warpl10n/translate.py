@@ -7,6 +7,7 @@ from pathlib import Path
 from .utils import (
     AIConfig,
     Progress,
+    RateLimiter,
     TranslationDict,
     build_glossary,
     load_json,
@@ -51,12 +52,14 @@ def _translate_batch(
     lang: str,
     glossary: str,
     ai_cfg: AIConfig,
+    limiter: RateLimiter,
 ) -> dict[str, str]:
     from openai import OpenAI
 
     client = OpenAI(base_url=ai_cfg.base_url, api_key=ai_cfg.api_key)
     keys = [source for _, source, _ in batch]
     prompt = _build_prompt(lang, glossary, batch)
+    limiter.wait()
     response = client.chat.completions.create(
         model=ai_cfg.model,
         temperature=0.1,
@@ -115,9 +118,16 @@ def translate_all(
 
     batches = _chunks(pending, batch_size)
     progress = Progress(len(batches), "translate")
+    limiter = RateLimiter(ai_cfg.rpm)
+    log.info(
+        "translating %d batches with concurrency=%d rpm=%s",
+        len(batches),
+        ai_cfg.concurrency,
+        "unlimited" if ai_cfg.rpm <= 0 else ai_cfg.rpm,
+    )
     with ThreadPoolExecutor(max_workers=ai_cfg.concurrency) as executor:
         futures = {
-            executor.submit(_translate_batch, batch, lang, glossary, ai_cfg): batch
+            executor.submit(_translate_batch, batch, lang, glossary, ai_cfg, limiter): batch
             for batch in batches
         }
         for future in as_completed(futures):
@@ -138,4 +148,3 @@ def translate_all(
     progress.finish()
     log.info("translation written to %s", output_path)
     return output
-

@@ -8,6 +8,8 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
    - `AI_API_KEY`：必填，OpenAI 或兼容服务密钥
    - `AI_BASE_URL`：可选，默认 `https://api.openai.com/v1`
    - `AI_MODEL`：可选，默认 `gpt-4o-mini`
+   - `AI_RPM`：可选，默认 `60`，设为 `0` 表示不限速
+   - `AI_CONCURRENCY`：可选，默认 `8`
 2. 运行 `01 Translate` 工作流：
    - `upstream_ref` 默认 `main`，也可以填写 Warp 的 tag/commit/branch
    - `target_lang` 默认 `zh-CN`
@@ -43,4 +45,3 @@ Warp 当前没有完整资源化的 i18n 文件，因此本工程采用与 zed-g
 ## 许可证
 
 本工具链使用 MIT License。Warp 上游源码遵循其自身许可证。
-

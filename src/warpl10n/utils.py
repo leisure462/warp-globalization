@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ class AIConfig:
     api_key: str = ""
     model: str = ""
     concurrency: int = 8
+    rpm: int = -1
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url or os.getenv("AI_BASE_URL") or "https://api.openai.com/v1"
@@ -30,10 +32,30 @@ class AIConfig:
         if self.concurrency <= 0:
             raw = os.getenv("AI_CONCURRENCY", "8")
             self.concurrency = int(raw) if raw.isdigit() else 8
+        if self.rpm < 0:
+            raw = os.getenv("AI_RPM", "60")
+            self.rpm = int(raw) if raw.isdigit() else 60
 
     def validate(self) -> None:
         if not self.api_key:
             raise SystemExit("AI_API_KEY is required. Set it as a secret or pass --api-key.")
+
+
+class RateLimiter:
+    def __init__(self, rpm: int) -> None:
+        self.interval = 0.0 if rpm <= 0 else 60.0 / rpm
+        self._lock = threading.Lock()
+        self._next_time = 0.0
+
+    def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if now < self._next_time:
+                time.sleep(self._next_time - now)
+                now = time.monotonic()
+            self._next_time = now + self.interval
 
 
 class Progress:

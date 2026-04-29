@@ -130,6 +130,7 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
           AI_CONCURRENCY: ${{ vars.AI_CONCURRENCY || '8' }}
+          AI_RPM: ${{ vars.AI_RPM || '60' }}
         shell: bash
         run: |
           warpl10n translate \

@@ -12,6 +12,7 @@ def _add_ai_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-key", default="", help="OpenAI-compatible API key")
     parser.add_argument("--model", default="", help="model name")
     parser.add_argument("--concurrency", type=int, default=0, help="translation concurrency")
+    parser.add_argument("--rpm", type=int, default=-1, help="request limit per minute; 0 means unlimited")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +86,7 @@ def main() -> None:
     elif args.command == "translate":
         from .translate import translate_all
 
-        cfg = AIConfig(args.base_url, args.api_key, args.model, args.concurrency)
+        cfg = AIConfig(args.base_url, args.api_key, args.model, args.concurrency, args.rpm)
         translate_all(
             args.input,
             args.output,
@@ -106,7 +107,7 @@ def main() -> None:
         save_scan_result("scan_result.json", args.version, files)
         extract_all(args.source_root, files, "string.json", "string_context.json")
         output = f"i18n/{args.version}/{args.lang}.json"
-        cfg = AIConfig(args.base_url, args.api_key, args.model, args.concurrency)
+        cfg = AIConfig(args.base_url, args.api_key, args.model, args.concurrency, args.rpm)
         translate_all("string.json", output, "string_context.json", args.glossary, args.lang, args.mode, 30, cfg)
 
     elif args.command == "replace":
@@ -131,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -20,6 +20,7 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
    - 勾选 `publish_release` 会创建 GitHub Release
 
 翻译结果会提交到仓库的 `i18n` 分支，主分支只保存工具链和 Actions 配置。
+每次翻译都会同时维护 `i18n/<版本>/<语言>.json` 和 `i18n/<语言>.json`。后者作为跨版本翻译记忆，新 upstream commit 没有精确版本翻译时会自动复用它，只补翻新增或变更的字符串。
 
 ## 本地命令
 

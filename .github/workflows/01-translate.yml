@@ -123,14 +123,41 @@ jobs:
       - name: Prepare translation file
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "i18n/${{ steps.upstream.outputs.version }}"
           TRANS_FILE="i18n/${{ steps.upstream.outputs.version }}/${{ inputs.target_lang }}.json"
           if [ ! -f "$TRANS_FILE" ]; then
             if [ -f "i18n/${{ inputs.target_lang }}.json" ]; then
+              echo "Using rolling translation memory: i18n/${{ inputs.target_lang }}.json"
               cp "i18n/${{ inputs.target_lang }}.json" "$TRANS_FILE"
             else
-              echo '{}' > "$TRANS_FILE"
+              BASE_FILE=""
+              if git rev-parse --verify origin/i18n >/dev/null 2>&1; then
+                BASE_FILE="$(
+                  {
+                    git ls-tree -r --name-only origin/i18n -- i18n 2>/dev/null \
+                      | grep "/${{ inputs.target_lang }}\.json$" \
+                      | while read -r path; do
+                          ts="$(git log -1 --format=%ct origin/i18n -- "$path" 2>/dev/null || echo 0)"
+                          printf '%s\t%s\n' "$ts" "$path"
+                        done \
+                      | sort -nr \
+                      | head -n 1 \
+                      | cut -f2-
+                  } || true
+                )"
+              fi
+              if [ -n "$BASE_FILE" ]; then
+                echo "Using latest committed translation memory: $BASE_FILE"
+                git checkout origin/i18n -- "$BASE_FILE"
+                cp "$BASE_FILE" "$TRANS_FILE"
+              else
+                echo "No translation memory found; starting from an empty file."
+                echo '{}' > "$TRANS_FILE"
+              fi
             fi
+          else
+            echo "Using exact-version translation: $TRANS_FILE"
           fi
           echo "TRANS_FILE=$TRANS_FILE" >> "$GITHUB_ENV"
 
@@ -152,7 +179,10 @@ jobs:
             --mode "${{ inputs.mode }}"
 
       - name: Validate translation
-        run: warpl10n validate --input "$TRANS_FILE"
+        shell: bash
+        run: |
+          warpl10n validate --input "$TRANS_FILE"
+          cp "$TRANS_FILE" "i18n/${{ inputs.target_lang }}.json"
 
       - name: Upload translation artifact
         uses: actions/upload-artifact@v7

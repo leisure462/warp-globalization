@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warpl10n"
+version = "0.1.0"
+description = "Warp Simplified Chinese localization and GitHub Actions build toolchain"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+ai = ["openai>=1.0"]
+all = ["warpl10n[ai]"]
+
+[project.scripts]
+warpl10n = "warpl10n.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

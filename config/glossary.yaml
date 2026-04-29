@@ -1,0 +1,39 @@
+terms:
+  Warp: Warp
+  Warp Drive: Warp Drive
+  Agent Mode: Agent 模式
+  Agent: Agent
+  AI: AI
+  terminal: 终端
+  Terminal: 终端
+  command: 命令
+  Command Palette: 命令面板
+  workspace: 工作区
+  Workspace: 工作区
+  tab: 标签页
+  pane: 面板
+  block: 块
+  workflow: 工作流
+  notebook: 笔记本
+  settings: 设置
+  Settings: 设置
+  keybinding: 快捷键
+  keybindings: 快捷键
+  shell: Shell
+  SSH: SSH
+  MCP: MCP
+  OpenAI: OpenAI
+  Claude: Claude
+  Gemini: Gemini
+keep_original:
+  - Warp
+  - Warp Drive
+  - OpenAI
+  - Claude
+  - Gemini
+  - GitHub
+  - SSH
+  - MCP
+  - PATH
+  - HOME
+

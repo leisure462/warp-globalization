@@ -1,0 +1,393 @@
+name: 02 Build
+
+on:
+  repository_dispatch:
+    types: [build-ready]
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Warp upstream ref: branch, tag, or commit"
+        type: string
+        required: true
+        default: "main"
+      lang:
+        description: "Translation language"
+        type: choice
+        options:
+          - zh-CN
+        default: zh-CN
+      platform:
+        description: "Platform to build"
+        type: choice
+        options:
+          - windows-x86_64
+          - linux-x86_64
+          - macos-aarch64
+          - all
+        default: windows-x86_64
+      publish_release:
+        description: "Publish GitHub Release"
+        type: boolean
+        default: false
+      build_installer:
+        description: "Build native installer when supported"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: build-${{ github.event_name }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  WARP_REPO: https://github.com/warpdotdev/warp.git
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUSTFLAGS: -C debuginfo=line-tables-only --cfg=web_sys_unstable_apis
+
+jobs:
+  prepare:
+    name: Prepare localization patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      upstream_ref: ${{ steps.vars.outputs.upstream_ref }}
+      version: ${{ steps.upstream.outputs.version }}
+      lang: ${{ steps.vars.outputs.lang }}
+      platform: ${{ steps.vars.outputs.platform }}
+      publish_release: ${{ steps.vars.outputs.publish_release }}
+      build_installer: ${{ steps.vars.outputs.build_installer }}
+    steps:
+      - name: Checkout localization repo
+        uses: actions/checkout@v4
+
+      - name: Set run variables
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            UPSTREAM_REF="${{ github.event.client_payload.upstream_ref }}"
+            VERSION="${{ github.event.client_payload.version }}"
+            LANG="${{ github.event.client_payload.lang }}"
+            PLATFORM="${{ github.event.client_payload.platform }}"
+            PUBLISH_RELEASE="${{ github.event.client_payload.publish_release }}"
+            BUILD_INSTALLER="${{ github.event.client_payload.build_installer }}"
+          else
+            UPSTREAM_REF="${{ inputs.upstream_ref }}"
+            VERSION=""
+            LANG="${{ inputs.lang }}"
+            PLATFORM="${{ inputs.platform }}"
+            PUBLISH_RELEASE="${{ inputs.publish_release }}"
+            BUILD_INSTALLER="${{ inputs.build_installer }}"
+          fi
+          LANG="${LANG:-zh-CN}"
+          PLATFORM="${PLATFORM:-windows-x86_64}"
+          PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
+          BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
+          echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "lang=$LANG" >> "$GITHUB_OUTPUT"
+          echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "build_installer=$BUILD_INSTALLER" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install localization tool
+        run: pip install .
+
+      - name: Checkout Warp upstream
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ steps.vars.outputs.upstream_ref }}"
+          git clone --filter=blob:none "$WARP_REPO" warp
+          cd warp
+          git checkout "$REF" 2>/dev/null || {
+            git fetch --depth 1 origin "$REF"
+            git checkout FETCH_HEAD
+          }
+          SHA="$(git rev-parse --short=12 HEAD)"
+          VERSION="${{ steps.vars.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$REF"
+            if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
+              VERSION="${REF}-${SHA}"
+            fi
+            VERSION="${VERSION//\//-}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Get translation data
+        shell: bash
+        run: |
+          git fetch origin i18n || true
+          git checkout origin/i18n -- i18n 2>/dev/null || true
+          test -d i18n || {
+            echo "::error::No i18n branch data found. Run 01 Translate first."
+            exit 1
+          }
+          TRANS_FILE="$(warpl10n select-translation \
+            --i18n-root i18n \
+            --version "${{ steps.upstream.outputs.version }}" \
+            --lang "${{ steps.vars.outputs.lang }}")"
+          echo "TRANS_FILE=$TRANS_FILE" >> "$GITHUB_ENV"
+          echo "Using translation: $TRANS_FILE"
+
+      - name: Apply localization
+        shell: bash
+        run: |
+          warpl10n replace \
+            --input "$TRANS_FILE" \
+            --source-root warp \
+            --do-not-translate config/do_not_translate.json
+          git -C warp diff --binary > l10n.patch
+          if [ ! -s l10n.patch ]; then
+            echo "::warning::Localization patch is empty."
+          fi
+
+      - name: Upload localization patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: l10n-patch
+          path: l10n.patch
+          retention-days: 7
+
+  build-windows-x86_64:
+    name: Build Windows x64
+    needs: prepare
+    if: ${{ needs.prepare.outputs.platform == 'windows-x86_64' || needs.prepare.outputs.platform == 'all' }}
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download localization patch
+        uses: actions/download-artifact@v4
+        with:
+          name: l10n-patch
+
+      - name: Checkout Warp upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none "$WARP_REPO" warp
+          cd warp
+          git checkout "${{ needs.prepare.outputs.upstream_ref }}" 2>/dev/null || {
+            git fetch --depth 1 origin "${{ needs.prepare.outputs.upstream_ref }}"
+            git checkout FETCH_HEAD
+          }
+          if [ -s "$GITHUB_WORKSPACE/l10n.patch" ]; then
+            git apply "$GITHUB_WORKSPACE/l10n.patch"
+          else
+            echo "Localization patch is empty; continuing without applying a patch."
+          fi
+
+      - name: Prepare Warp build environment
+        uses: ./warp/.github/actions/prepare_environment
+        with:
+          target_os: windows
+          is_self_hosted: "false"
+
+      - name: Build Warp OSS
+        shell: bash
+        working-directory: warp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.prepare.outputs.build_installer }}" = "true" ]; then
+            ./script/bundle --channel oss --nouniversal --release-tag "${{ needs.prepare.outputs.version }}"
+          else
+            ./script/bundle --channel oss --nouniversal --release-tag "${{ needs.prepare.outputs.version }}" --skip-build-installer
+          fi
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = Get-ChildItem -Path .\warp\target -Recurse -Filter "warp-oss.exe" |
+            Where-Object { $_.FullName -match "rlto" } |
+            Select-Object -First 1
+          if (-not $exe) { throw "warp-oss.exe not found" }
+          Copy-Item $exe.FullName "dist\warp-oss.exe"
+          if (Test-Path ".\warp\script\windows\Output") {
+            Copy-Item ".\warp\script\windows\Output\*.exe" "dist\" -ErrorAction SilentlyContinue
+          }
+          Compress-Archive -Path "dist\*" -DestinationPath "warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip" -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64
+          path: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip
+
+  build-linux-x86_64:
+    name: Build Linux x64
+    needs: prepare
+    if: ${{ needs.prepare.outputs.platform == 'linux-x86_64' || needs.prepare.outputs.platform == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download localization patch
+        uses: actions/download-artifact@v4
+        with:
+          name: l10n-patch
+
+      - name: Checkout Warp upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none "$WARP_REPO" warp
+          cd warp
+          git checkout "${{ needs.prepare.outputs.upstream_ref }}" 2>/dev/null || {
+            git fetch --depth 1 origin "${{ needs.prepare.outputs.upstream_ref }}"
+            git checkout FETCH_HEAD
+          }
+          if [ -s "$GITHUB_WORKSPACE/l10n.patch" ]; then
+            git apply "$GITHUB_WORKSPACE/l10n.patch"
+          else
+            echo "Localization patch is empty; continuing without applying a patch."
+          fi
+
+      - name: Prepare Warp build environment
+        uses: ./warp/.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: "false"
+
+      - name: Build Warp OSS
+        id: bundle
+        shell: bash
+        working-directory: warp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./script/bundle --channel oss --nouniversal --release-tag "${{ needs.prepare.outputs.version }}" --packages binary
+
+      - name: Package Linux artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "${{ steps.bundle.outputs.executable_path }}" dist/warp-oss
+          tar -czf "warp-${{ needs.prepare.outputs.lang }}-linux-x86_64-${{ needs.prepare.outputs.version }}.tar.gz" -C dist .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-${{ needs.prepare.outputs.lang }}-linux-x86_64
+          path: warp-${{ needs.prepare.outputs.lang }}-linux-x86_64-${{ needs.prepare.outputs.version }}.tar.gz
+
+  build-macos-aarch64:
+    name: Build macOS ARM64
+    needs: prepare
+    if: ${{ needs.prepare.outputs.platform == 'macos-aarch64' || needs.prepare.outputs.platform == 'all' }}
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download localization patch
+        uses: actions/download-artifact@v4
+        with:
+          name: l10n-patch
+
+      - name: Checkout Warp upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none "$WARP_REPO" warp
+          cd warp
+          git checkout "${{ needs.prepare.outputs.upstream_ref }}" 2>/dev/null || {
+            git fetch --depth 1 origin "${{ needs.prepare.outputs.upstream_ref }}"
+            git checkout FETCH_HEAD
+          }
+          if [ -s "$GITHUB_WORKSPACE/l10n.patch" ]; then
+            git apply "$GITHUB_WORKSPACE/l10n.patch"
+          else
+            echo "Localization patch is empty; continuing without applying a patch."
+          fi
+
+      - name: Prepare Warp build environment
+        uses: ./warp/.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: "false"
+
+      - name: Build Warp OSS
+        id: bundle
+        shell: bash
+        working-directory: warp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./script/bundle \
+            --channel oss \
+            --nouniversal \
+            --arch aarch64 \
+            --nosign \
+            --release-tag "${{ needs.prepare.outputs.version }}" \
+            --dmg-name-suffix "${{ needs.prepare.outputs.lang }}-${{ needs.prepare.outputs.version }}"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-${{ needs.prepare.outputs.lang }}-macos-aarch64
+          path: ${{ steps.bundle.outputs.dmg_path }}
+
+  release:
+    name: Publish Release
+    needs:
+      - prepare
+      - build-windows-x86_64
+      - build-linux-x86_64
+      - build-macos-aarch64
+    if: >-
+      always() &&
+      needs.prepare.outputs.publish_release == 'true' &&
+      needs.prepare.result == 'success' &&
+      (needs.build-windows-x86_64.result == 'success' || needs.build-windows-x86_64.result == 'skipped') &&
+      (needs.build-linux-x86_64.result == 'success' || needs.build-linux-x86_64.result == 'skipped') &&
+      (needs.build-macos-aarch64.result == 'success' || needs.build-macos-aarch64.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: warp-${{ needs.prepare.outputs.lang }}-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum * > sha256sums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: warp-${{ needs.prepare.outputs.lang }}-${{ needs.prepare.outputs.version }}
+          name: Warp ${{ needs.prepare.outputs.lang }} ${{ needs.prepare.outputs.version }}
+          files: artifacts/*
+          body: |
+            Warp OSS localized build.
+
+            Upstream ref: ${{ needs.prepare.outputs.upstream_ref }}
+            Language: ${{ needs.prepare.outputs.lang }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

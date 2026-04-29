@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+.cache/
+warp/
+warp-src/
+target/
+dist/
+
+string.json
+string_context.json
+scan_result.json
+l10n.patch
+

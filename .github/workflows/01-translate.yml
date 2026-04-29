@@ -1,0 +1,199 @@
+name: 01 Translate
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Warp upstream ref: branch, tag, or commit"
+        type: string
+        required: true
+        default: "main"
+      target_lang:
+        description: "Target language"
+        type: choice
+        options:
+          - zh-CN
+        default: zh-CN
+      mode:
+        description: "Translation mode"
+        type: choice
+        options:
+          - incremental
+          - full
+        default: incremental
+      scan_mode:
+        description: "String scan scope"
+        type: choice
+        options:
+          - heuristic
+          - all
+        default: heuristic
+      chain_build:
+        description: "Trigger build after translation"
+        type: boolean
+        default: true
+      build_platform:
+        description: "Build platform when chain_build is enabled"
+        type: choice
+        options:
+          - windows-x86_64
+          - linux-x86_64
+          - macos-aarch64
+          - all
+        default: windows-x86_64
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: translate-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WARP_REPO: https://github.com/warpdotdev/warp.git
+
+jobs:
+  translate:
+    name: Extract and translate
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout localization repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install localization tool
+        run: pip install ".[ai]"
+
+      - name: Checkout Warp upstream
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ inputs.upstream_ref }}"
+          git clone --filter=blob:none "$WARP_REPO" warp
+          cd warp
+          git checkout "$REF" 2>/dev/null || {
+            git fetch --depth 1 origin "$REF"
+            git checkout FETCH_HEAD
+          }
+          SHA="$(git rev-parse --short=12 HEAD)"
+          VERSION="$REF"
+          if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
+            VERSION="${REF}-${SHA}"
+          fi
+          VERSION="${VERSION//\//-}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Using Warp $REF ($SHA), localization version $VERSION"
+
+      - name: Restore i18n branch data
+        shell: bash
+        run: |
+          git fetch origin i18n || true
+          git checkout origin/i18n -- i18n scan_result.json string.json string_context.json 2>/dev/null || true
+          mkdir -p i18n
+
+      - name: Extract strings
+        shell: bash
+        run: |
+          warpl10n extract \
+            --source-root warp \
+            --version "${{ steps.upstream.outputs.version }}" \
+            --scan-mode "${{ inputs.scan_mode }}" \
+            --output string.json \
+            --context-output string_context.json \
+            --scan-result scan_result.json
+
+      - name: Prepare translation file
+        shell: bash
+        run: |
+          mkdir -p "i18n/${{ steps.upstream.outputs.version }}"
+          TRANS_FILE="i18n/${{ steps.upstream.outputs.version }}/${{ inputs.target_lang }}.json"
+          if [ ! -f "$TRANS_FILE" ]; then
+            if [ -f "i18n/${{ inputs.target_lang }}.json" ]; then
+              cp "i18n/${{ inputs.target_lang }}.json" "$TRANS_FILE"
+            else
+              echo '{}' > "$TRANS_FILE"
+            fi
+          fi
+          echo "TRANS_FILE=$TRANS_FILE" >> "$GITHUB_ENV"
+
+      - name: Translate with AI
+        env:
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_CONCURRENCY: ${{ vars.AI_CONCURRENCY || '8' }}
+        shell: bash
+        run: |
+          warpl10n translate \
+            --input string.json \
+            --output "$TRANS_FILE" \
+            --context string_context.json \
+            --glossary config/glossary.yaml \
+            --lang "${{ inputs.target_lang }}" \
+            --mode "${{ inputs.mode }}"
+
+      - name: Validate translation
+        run: warpl10n validate --input "$TRANS_FILE"
+
+      - name: Upload translation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-${{ inputs.target_lang }}-${{ steps.upstream.outputs.version }}-translation
+          path: |
+            scan_result.json
+            string.json
+            string_context.json
+            i18n/${{ steps.upstream.outputs.version }}/${{ inputs.target_lang }}.json
+          retention-days: 30
+
+      - name: Push i18n branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK=/tmp/warp-globalization-i18n
+          rm -rf "$WORK"
+          if git ls-remote --heads origin i18n | grep -q i18n; then
+            git clone --branch i18n --single-branch --depth 1 \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+              "$WORK"
+          else
+            mkdir -p "$WORK"
+            git -C "$WORK" init
+            git -C "$WORK" checkout -b i18n
+            git -C "$WORK" remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          fi
+
+          mkdir -p "$WORK/i18n"
+          cp scan_result.json string.json string_context.json "$WORK/"
+          cp -R i18n/. "$WORK/i18n/"
+
+          cd "$WORK"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scan_result.json string.json string_context.json i18n/
+          git diff --cached --quiet || git commit -m "feat(i18n): update ${{ inputs.target_lang }} for ${{ steps.upstream.outputs.version }}"
+          git push origin i18n
+
+      - name: Trigger build
+        if: ${{ inputs.chain_build }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=build-ready \
+            -f "client_payload[upstream_ref]=${{ inputs.upstream_ref }}" \
+            -f "client_payload[version]=${{ steps.upstream.outputs.version }}" \
+            -f "client_payload[lang]=${{ inputs.target_lang }}" \
+            -f "client_payload[platform]=${{ inputs.build_platform }}" \
+            -f "client_payload[publish_release]=false" \
+            -f "client_payload[build_installer]=false"

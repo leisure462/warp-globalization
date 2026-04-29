@@ -1,0 +1,22 @@
+{
+    "global_entries": [
+        {"original": "Warp"},
+        {"original": "WarpOss"},
+        {"original": "WarpDev"},
+        {"original": "WarpPreview"},
+        {"original": "OpenAI"},
+        {"original": "Claude"},
+        {"original": "Gemini"},
+        {"original": "GitHub"},
+        {"original": "MCP"},
+        {"original": "SSH"},
+        {"original": "PATH"},
+        {"original": "HOME"},
+        {"original": "http"},
+        {"original": "https"},
+        {"original": "application/json"},
+        {"original": "text/plain"}
+    ],
+    "entries": []
+}
+

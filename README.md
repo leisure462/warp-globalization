@@ -11,7 +11,7 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
    - `AI_RPM`：可选，默认 `60`，设为 `0` 表示不限速
    - `AI_CONCURRENCY`：可选，默认 `8`
 2. 运行 `01 Translate` 工作流：
-   - `upstream_ref` 默认 `main`，也可以填写 Warp 的 tag/commit/branch
+   - `upstream_ref` 默认 `master`，也可以填写 Warp 的 tag/commit/branch
    - `target_lang` 默认 `zh-CN`
    - 勾选 `chain_build` 可在翻译完成后自动触发构建
 3. 运行 `02 Build` 工作流：

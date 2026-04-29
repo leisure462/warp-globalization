@@ -9,7 +9,7 @@ on:
         description: "Warp upstream ref: branch, tag, or commit"
         type: string
         required: true
-        default: "main"
+        default: "master"
       lang:
         description: "Translation language"
         type: choice
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
-      upstream_ref: ${{ steps.vars.outputs.upstream_ref }}
+      upstream_ref: ${{ steps.upstream.outputs.ref }}
       version: ${{ steps.upstream.outputs.version }}
       lang: ${{ steps.vars.outputs.lang }}
       platform: ${{ steps.vars.outputs.platform }}
@@ -109,6 +109,12 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ steps.vars.outputs.upstream_ref }}"
+          if [ "$REF" = "main" ] \
+            && ! git ls-remote --exit-code --heads "$WARP_REPO" main >/dev/null 2>&1 \
+            && git ls-remote --exit-code --heads "$WARP_REPO" master >/dev/null 2>&1; then
+            echo "::warning::Warp upstream has no main branch; falling back to master."
+            REF="master"
+          fi
           git clone --filter=blob:none "$WARP_REPO" warp
           cd warp
           git checkout "$REF" 2>/dev/null || {
@@ -126,6 +132,7 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
       - name: Get translation data
         shell: bash

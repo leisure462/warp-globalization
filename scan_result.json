@@ -1,5 +1,5 @@
 {
-    "version": "master-d0f045c01bac",
+    "version": "v0.2026.04.29.08.56.stable_00",
     "files": [
         "app/src/ai/agent/api.rs",
         "app/src/ai/agent/api/convert_conversation.rs",

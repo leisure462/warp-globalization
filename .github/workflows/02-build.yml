@@ -3,6 +3,9 @@ name: 02 Build
 on:
   repository_dispatch:
     types: [build-ready]
+  workflow_run:
+    workflows: ["01 Translate"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -52,6 +55,7 @@ env:
 jobs:
   prepare:
     name: Prepare localization patch
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
@@ -62,9 +66,23 @@ jobs:
       platform: ${{ steps.vars.outputs.platform }}
       publish_release: ${{ steps.vars.outputs.publish_release }}
       build_installer: ${{ steps.vars.outputs.build_installer }}
+      should_build: ${{ steps.vars.outputs.should_build }}
     steps:
       - name: Checkout localization repo
         uses: actions/checkout@v6
+
+      - name: Download build request from translate run
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-request
+          gh run download "${{ github.event.workflow_run.id }}" \
+            --repo "${{ github.repository }}" \
+            --name build-request \
+            --dir build-request
 
       - name: Set run variables
         id: vars
@@ -79,6 +97,24 @@ jobs:
             PLATFORM="${{ github.event.client_payload.platform }}"
             PUBLISH_RELEASE="${{ github.event.client_payload.publish_release }}"
             BUILD_INSTALLER="${{ github.event.client_payload.build_installer }}"
+            SHOULD_BUILD="true"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            if [ -f build-request/build-request.env ]; then
+              set -a
+              . build-request/build-request.env
+              set +a
+              SHOULD_BUILD="${CHAIN_BUILD:-false}"
+            else
+              echo "::notice::No build request artifact found; skipping chained build."
+              SHOULD_BUILD="false"
+            fi
+            UPSTREAM_REF="${UPSTREAM_REF:-master}"
+            SOURCE_REF="${SOURCE_REF:-$UPSTREAM_REF}"
+            VERSION="${VERSION:-}"
+            LANG="${LANG:-zh-CN}"
+            PLATFORM="${PLATFORM:-windows-x86_64}"
+            PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
+            BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
           else
             UPSTREAM_REF="${{ inputs.upstream_ref }}"
             SOURCE_REF="$UPSTREAM_REF"
@@ -87,11 +123,14 @@ jobs:
             PLATFORM="${{ inputs.platform }}"
             PUBLISH_RELEASE="${{ inputs.publish_release }}"
             BUILD_INSTALLER="${{ inputs.build_installer }}"
+            SHOULD_BUILD="true"
           fi
           LANG="${LANG:-zh-CN}"
           PLATFORM="${PLATFORM:-windows-x86_64}"
           PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
           BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
+          SHOULD_BUILD="${SHOULD_BUILD:-true}"
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
           echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
           echo "source_ref=${SOURCE_REF:-$UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -101,14 +140,17 @@ jobs:
           echo "build_installer=$BUILD_INSTALLER" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install localization tool
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         run: pip install .
 
       - name: Checkout Warp upstream
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         id: upstream
         shell: bash
         run: |
@@ -147,6 +189,7 @@ jobs:
           echo "source_ref=${SOURCE_REF:-$REF}" >> "$GITHUB_OUTPUT"
 
       - name: Get translation data
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         shell: bash
         run: |
           git fetch origin i18n || true
@@ -163,6 +206,7 @@ jobs:
           echo "Using translation: $TRANS_FILE"
 
       - name: Apply localization
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         shell: bash
         run: |
           warpl10n replace \
@@ -175,6 +219,7 @@ jobs:
           fi
 
       - name: Upload localization patch
+        if: ${{ steps.vars.outputs.should_build == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: l10n-patch
@@ -184,7 +229,7 @@ jobs:
   build-windows-x86_64:
     name: Build Windows x64
     needs: prepare
-    if: ${{ needs.prepare.outputs.platform == 'windows-x86_64' || needs.prepare.outputs.platform == 'all' }}
+    if: ${{ needs.prepare.outputs.should_build == 'true' && (needs.prepare.outputs.platform == 'windows-x86_64' || needs.prepare.outputs.platform == 'all') }}
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
@@ -264,28 +309,29 @@ jobs:
           }
 
           # ── 4. 写入使用说明 ───────────────────────────────────────────────
-          @"
-# Warp OSS 汉化版 - 使用说明
-
-## 运行方法
-将整个 dist 目录中的所有文件解压到同一文件夹，保持目录结构：
-  warp-oss.exe
-  resources\
-    bundled\
-      metadata\
-        version.json
-    settings_schema.json
-    ...
-
-然后双击 warp-oss.exe 运行。
-
-## 注意事项
-- 必须保持 resources\ 目录与 warp-oss.exe 在同一目录下
-- 首次运行可能需要安装 Microsoft Edge WebView2 Runtime
-  下载地址: https://developer.microsoft.com/microsoft-edge/webview2/
-- 若仍无法启动，请检查是否安装了 Visual C++ Redistributable (x64)
-  下载地址: https://aka.ms/vs/17/release/vc_redist.x64.exe
-"@ | Out-File -Encoding UTF8 "dist\README.txt"
+          $readme = @(
+            "# Warp OSS 汉化版 - 使用说明"
+            ""
+            "## 运行方法"
+            "将整个 dist 目录中的所有文件解压到同一文件夹，保持目录结构："
+            "  warp-oss.exe"
+            "  resources\"
+            "    bundled\"
+            "      metadata\"
+            "        version.json"
+            "    settings_schema.json"
+            "    ..."
+            ""
+            "然后双击 warp-oss.exe 运行。"
+            ""
+            "## 注意事项"
+            "- 必须保持 resources\ 目录与 warp-oss.exe 在同一目录下"
+            "- 首次运行可能需要安装 Microsoft Edge WebView2 Runtime"
+            "  下载地址: https://developer.microsoft.com/microsoft-edge/webview2/"
+            "- 若仍无法启动，请检查是否安装了 Visual C++ Redistributable (x64)"
+            "  下载地址: https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          )
+          $readme | Set-Content -Encoding UTF8 "dist\README.txt"
 
           Compress-Archive -Path "dist\*" -DestinationPath "warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip" -Force
           Write-Host "Package created successfully."
@@ -299,7 +345,7 @@ jobs:
   build-linux-x86_64:
     name: Build Linux x64
     needs: prepare
-    if: ${{ needs.prepare.outputs.platform == 'linux-x86_64' || needs.prepare.outputs.platform == 'all' }}
+    if: ${{ needs.prepare.outputs.should_build == 'true' && (needs.prepare.outputs.platform == 'linux-x86_64' || needs.prepare.outputs.platform == 'all') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
@@ -360,7 +406,7 @@ jobs:
   build-macos-aarch64:
     name: Build macOS ARM64
     needs: prepare
-    if: ${{ needs.prepare.outputs.platform == 'macos-aarch64' || needs.prepare.outputs.platform == 'all' }}
+    if: ${{ needs.prepare.outputs.should_build == 'true' && (needs.prepare.outputs.platform == 'macos-aarch64' || needs.prepare.outputs.platform == 'all') }}
     runs-on: macos-latest
     timeout-minutes: 360
     steps:
@@ -425,6 +471,7 @@ jobs:
       - build-macos-aarch64
     if: >-
       always() &&
+      needs.prepare.outputs.should_build == 'true' &&
       needs.prepare.outputs.publish_release == 'true' &&
       needs.prepare.result == 'success' &&
       (needs.build-windows-x86_64.result == 'success' || needs.build-windows-x86_64.result == 'skipped') &&

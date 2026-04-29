@@ -13,7 +13,7 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
 2. 运行 `01 Translate` 工作流：
    - `upstream_ref` 默认 `master`，也可以填写 Warp 的 tag/commit/branch
    - `target_lang` 默认 `zh-CN`
-   - 勾选 `chain_build` 可在翻译完成后自动触发构建
+   - 勾选 `chain_build` 后，翻译成功并推送 `i18n` 分支后会自动启动 `02 Build`
 3. 运行 `02 Build` 工作流：
    - 默认构建 `windows-x86_64`
    - 产物会上传为 Actions Artifact
@@ -36,8 +36,8 @@ warpl10n replace --input i18n/zh-CN.json --source-root warp --do-not-translate c
 
 ## 工作流
 
-- `01 Translate`：拉取 Warp、扫描候选 Rust 文件、提取字符串、AI 翻译、校验占位符、推送到 `i18n` 分支。
-- `02 Build`：拉取 Warp、从 `i18n` 分支选择翻译文件、应用源码替换、生成补丁、在 GitHub runner 上构建。
+- `01 Translate`：拉取 Warp、扫描候选 Rust 文件、提取字符串、AI 翻译、校验占位符、推送到 `i18n` 分支，并上传自动构建请求。
+- `02 Build`：支持手动运行，也会在 `01 Translate` 成功完成后读取构建请求自动运行；它会拉取 Warp、从 `i18n` 分支选择翻译文件、应用源码替换、生成补丁、在 GitHub runner 上构建。
 
 ## 当前策略
 

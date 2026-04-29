@@ -224,18 +224,25 @@ jobs:
           git diff --cached --quiet || git commit -m "feat(i18n): update ${{ inputs.target_lang }} for ${{ steps.upstream.outputs.version }}"
           git push origin i18n
 
-      - name: Trigger build
-        if: ${{ inputs.chain_build }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Write build request
         shell: bash
         run: |
-          gh api repos/${{ github.repository }}/dispatches \
-            -f event_type=build-ready \
-            -f "client_payload[upstream_ref]=${{ steps.upstream.outputs.sha }}" \
-            -f "client_payload[source_ref]=${{ steps.upstream.outputs.ref }}" \
-            -f "client_payload[version]=${{ steps.upstream.outputs.version }}" \
-            -f "client_payload[lang]=${{ inputs.target_lang }}" \
-            -f "client_payload[platform]=${{ inputs.build_platform }}" \
-            -f "client_payload[publish_release]=false" \
-            -f "client_payload[build_installer]=false"
+          set -euo pipefail
+          mkdir -p build-request
+          {
+            printf 'CHAIN_BUILD=%q\n' "${{ inputs.chain_build }}"
+            printf 'UPSTREAM_REF=%q\n' "${{ steps.upstream.outputs.sha }}"
+            printf 'SOURCE_REF=%q\n' "${{ steps.upstream.outputs.ref }}"
+            printf 'VERSION=%q\n' "${{ steps.upstream.outputs.version }}"
+            printf 'LANG=%q\n' "${{ inputs.target_lang }}"
+            printf 'PLATFORM=%q\n' "${{ inputs.build_platform }}"
+            printf 'PUBLISH_RELEASE=%q\n' "false"
+            printf 'BUILD_INSTALLER=%q\n' "false"
+          } > build-request/build-request.env
+
+      - name: Upload build request artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-request
+          path: build-request/build-request.env
+          retention-days: 7

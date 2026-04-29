@@ -35,6 +35,9 @@ def _build_prompt(lang: str, glossary: str, items: list[tuple[str, str, str]]) -
 Rules:
 - Translate user-visible English UI text naturally.
 - Preserve placeholders exactly: {{}}, {{name}}, {{0}}, {{:?}}, %s, %d, etc.
+- Keep unnumbered positional placeholders in the exact same left-to-right order.
+  For example, if the source order is {{:?}} then {{}}, the translation must keep
+  {{:?}} before {{}} even when Chinese wording would normally reorder them.
 - Preserve product names, model names, file paths, URLs, shell commands, environment variables, JSON keys, and code identifiers.
 - Keep keyboard shortcuts and command names readable.
 - Return only a JSON object whose keys are the original source strings and whose values are translations.
@@ -78,7 +81,7 @@ def _translate_batch(
         if not value:
             continue
         if not placeholders_match(key, value):
-            log.warning("placeholder mismatch, keeping untranslated: %r -> %r", key, value)
+            log.info("placeholder mismatch, keeping untranslated: %r -> %r", key, value)
             continue
         clean[key] = value
     return clean

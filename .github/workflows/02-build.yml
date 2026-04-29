@@ -44,6 +44,7 @@ concurrency:
 
 env:
   WARP_REPO: https://github.com/warpdotdev/warp.git
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   RUSTFLAGS: -C debuginfo=line-tables-only --cfg=web_sys_unstable_apis
@@ -63,7 +64,7 @@ jobs:
       build_installer: ${{ steps.vars.outputs.build_installer }}
     steps:
       - name: Checkout localization repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set run variables
         id: vars
@@ -100,7 +101,7 @@ jobs:
           echo "build_installer=$BUILD_INSTALLER" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -174,7 +175,7 @@ jobs:
           fi
 
       - name: Upload localization patch
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: l10n-patch
           path: l10n.patch
@@ -187,10 +188,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download localization patch
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: l10n-patch
 
@@ -244,7 +245,7 @@ jobs:
           Compress-Archive -Path "dist\*" -DestinationPath "warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip" -Force
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64
           path: warp-${{ needs.prepare.outputs.lang }}-windows-x86_64-${{ needs.prepare.outputs.version }}.zip
@@ -256,10 +257,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download localization patch
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: l10n-patch
 
@@ -304,7 +305,7 @@ jobs:
           tar -czf "warp-${{ needs.prepare.outputs.lang }}-linux-x86_64-${{ needs.prepare.outputs.version }}.tar.gz" -C dist .
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warp-${{ needs.prepare.outputs.lang }}-linux-x86_64
           path: warp-${{ needs.prepare.outputs.lang }}-linux-x86_64-${{ needs.prepare.outputs.version }}.tar.gz
@@ -316,10 +317,10 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download localization patch
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: l10n-patch
 
@@ -362,7 +363,7 @@ jobs:
             --dmg-name-suffix "${{ needs.prepare.outputs.lang }}-${{ needs.prepare.outputs.version }}"
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warp-${{ needs.prepare.outputs.lang }}-macos-aarch64
           path: ${{ steps.bundle.outputs.dmg_path }}
@@ -384,7 +385,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: warp-${{ needs.prepare.outputs.lang }}-*

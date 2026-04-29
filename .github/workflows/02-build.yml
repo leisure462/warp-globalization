@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: "Warp upstream ref: branch, tag, or commit"
+        description: "Warp upstream release/tag/branch/commit; use latest for the latest release"
         type: string
-        required: true
-        default: "master"
+        required: false
+        default: "latest"
       lang:
         description: "Translation language"
         type: choice
@@ -31,11 +31,11 @@ on:
       publish_release:
         description: "Publish GitHub Release"
         type: boolean
-        default: false
+        default: true
       build_installer:
         description: "Build native installer when supported"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -67,6 +67,7 @@ jobs:
       publish_release: ${{ steps.vars.outputs.publish_release }}
       build_installer: ${{ steps.vars.outputs.build_installer }}
       should_build: ${{ steps.vars.outputs.should_build }}
+      is_prerelease: ${{ steps.vars.outputs.is_prerelease }}
     steps:
       - name: Checkout localization repo
         uses: actions/checkout@v6
@@ -82,10 +83,12 @@ jobs:
           gh run download "${{ github.event.workflow_run.id }}" \
             --repo "${{ github.repository }}" \
             --name build-request \
-            --dir build-request
+            --dir build-request || true
 
       - name: Set run variables
         id: vars
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -97,6 +100,7 @@ jobs:
             PLATFORM="${{ github.event.client_payload.platform }}"
             PUBLISH_RELEASE="${{ github.event.client_payload.publish_release }}"
             BUILD_INSTALLER="${{ github.event.client_payload.build_installer }}"
+            IS_PRERELEASE="${{ github.event.client_payload.is_prerelease }}"
             SHOULD_BUILD="true"
           elif [ "${{ github.event_name }}" = "workflow_run" ]; then
             if [ -f build-request/build-request.env ]; then
@@ -115,6 +119,7 @@ jobs:
             PLATFORM="${PLATFORM:-windows-x86_64}"
             PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
             BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
+            IS_PRERELEASE="${IS_PRERELEASE:-false}"
           else
             UPSTREAM_REF="${{ inputs.upstream_ref }}"
             SOURCE_REF="$UPSTREAM_REF"
@@ -123,12 +128,39 @@ jobs:
             PLATFORM="${{ inputs.platform }}"
             PUBLISH_RELEASE="${{ inputs.publish_release }}"
             BUILD_INSTALLER="${{ inputs.build_installer }}"
+            IS_PRERELEASE="false"
             SHOULD_BUILD="true"
           fi
+
+          if [ "$SHOULD_BUILD" = "true" ]; then
+            UPSTREAM_REF="${UPSTREAM_REF:-latest}"
+            if [ "$UPSTREAM_REF" = "latest" ]; then
+              RELEASE_JSON="$(gh api repos/warpdotdev/warp/releases/latest)"
+              UPSTREAM_REF="$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')"
+              SOURCE_REF="$UPSTREAM_REF"
+              VERSION="$UPSTREAM_REF"
+              IS_PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease // false')"
+              if [ -z "$UPSTREAM_REF" ] || [ "$UPSTREAM_REF" = "null" ]; then
+                echo "::error::Unable to resolve latest Warp release."
+                exit 1
+              fi
+            elif [ -z "${VERSION:-}" ]; then
+              RELEASE_JSON="$(gh api "repos/warpdotdev/warp/releases/tags/$UPSTREAM_REF" 2>/dev/null || true)"
+              RELEASE_TAG="$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)"
+              if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "null" ]; then
+                UPSTREAM_REF="$RELEASE_TAG"
+                SOURCE_REF="$RELEASE_TAG"
+                VERSION="$RELEASE_TAG"
+                IS_PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease // false')"
+              fi
+            fi
+          fi
+
           LANG="${LANG:-zh-CN}"
           PLATFORM="${PLATFORM:-windows-x86_64}"
-          PUBLISH_RELEASE="${PUBLISH_RELEASE:-false}"
-          BUILD_INSTALLER="${BUILD_INSTALLER:-false}"
+          PUBLISH_RELEASE="${PUBLISH_RELEASE:-true}"
+          BUILD_INSTALLER="${BUILD_INSTALLER:-true}"
+          IS_PRERELEASE="${IS_PRERELEASE:-false}"
           SHOULD_BUILD="${SHOULD_BUILD:-true}"
           echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
           echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
@@ -138,6 +170,7 @@ jobs:
           echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
           echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
           echo "build_installer=$BUILD_INSTALLER" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: ${{ steps.vars.outputs.should_build == 'true' }}
@@ -495,8 +528,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: warp-${{ needs.prepare.outputs.lang }}-${{ needs.prepare.outputs.version }}
+          tag_name: ${{ needs.prepare.outputs.version }}
           name: Warp ${{ needs.prepare.outputs.lang }} ${{ needs.prepare.outputs.version }}
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
           files: artifacts/*
           body: |
             Warp OSS localized build.

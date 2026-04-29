@@ -1,13 +1,15 @@
 name: 01 Translate
 
 on:
+  schedule:
+    - cron: "0 0,8,16 * * *"
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: "Warp upstream ref: branch, tag, or commit"
+        description: "Warp upstream release/tag/branch/commit; use latest for the latest release"
         type: string
-        required: true
-        default: "master"
+        required: false
+        default: "latest"
       target_lang:
         description: "Target language"
         type: choice
@@ -41,6 +43,14 @@ on:
           - macos-aarch64
           - all
         default: windows-x86_64
+      publish_release:
+        description: "Publish GitHub Release after build"
+        type: boolean
+        default: true
+      build_installer:
+        description: "Build native installer when supported"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -60,23 +70,107 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
+      - name: Resolve Warp release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT_REF="${{ inputs.upstream_ref }}"
+          TARGET_LANG="${{ inputs.target_lang }}"
+          MODE="${{ inputs.mode }}"
+          SCAN_MODE="${{ inputs.scan_mode }}"
+          CHAIN_BUILD="${{ inputs.chain_build }}"
+          BUILD_PLATFORM="${{ inputs.build_platform }}"
+          PUBLISH_RELEASE="${{ inputs.publish_release }}"
+          BUILD_INSTALLER="${{ inputs.build_installer }}"
+
+          INPUT_REF="${INPUT_REF:-latest}"
+          TARGET_LANG="${TARGET_LANG:-zh-CN}"
+          MODE="${MODE:-incremental}"
+          SCAN_MODE="${SCAN_MODE:-heuristic}"
+          CHAIN_BUILD="${CHAIN_BUILD:-true}"
+          BUILD_PLATFORM="${BUILD_PLATFORM:-windows-x86_64}"
+          PUBLISH_RELEASE="${PUBLISH_RELEASE:-true}"
+          BUILD_INSTALLER="${BUILD_INSTALLER:-true}"
+
+          IS_PRERELEASE="false"
+          IS_RELEASE="false"
+          VERSION=""
+          REF="$INPUT_REF"
+
+          if [ "$INPUT_REF" = "latest" ]; then
+            RELEASE_JSON="$(gh api repos/warpdotdev/warp/releases/latest)"
+            REF="$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')"
+            VERSION="$REF"
+            IS_PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease // false')"
+            IS_RELEASE="true"
+          else
+            RELEASE_JSON="$(gh api "repos/warpdotdev/warp/releases/tags/$INPUT_REF" 2>/dev/null || true)"
+            RELEASE_TAG="$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)"
+            if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "null" ]; then
+              REF="$RELEASE_TAG"
+              VERSION="$RELEASE_TAG"
+              IS_PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease // false')"
+              IS_RELEASE="true"
+            fi
+          fi
+
+          if [ -z "$REF" ] || [ "$REF" = "null" ]; then
+            echo "::error::Unable to resolve Warp upstream ref: $INPUT_REF"
+            exit 1
+          fi
+
+          SHOULD_TRANSLATE="true"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$IS_RELEASE" = "true" ]; then
+            if gh release view "$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "Release $VERSION already exists in ${{ github.repository }}; skipping."
+              SHOULD_TRANSLATE="false"
+              CHAIN_BUILD="false"
+              PUBLISH_RELEASE="false"
+            fi
+          fi
+
+          echo "upstream_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "target_lang=$TARGET_LANG" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "scan_mode=$SCAN_MODE" >> "$GITHUB_OUTPUT"
+          echo "chain_build=$CHAIN_BUILD" >> "$GITHUB_OUTPUT"
+          echo "build_platform=$BUILD_PLATFORM" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "build_installer=$BUILD_INSTALLER" >> "$GITHUB_OUTPUT"
+          echo "should_translate=$SHOULD_TRANSLATE" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved Warp ref: $REF"
+          echo "Resolved version: ${VERSION:-will be derived from commit}"
+          echo "Pre-release: $IS_PRERELEASE"
+          echo "Should translate: $SHOULD_TRANSLATE"
+
       - name: Checkout localization repo
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         uses: actions/checkout@v6
 
       - name: Set up Python
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install localization tool
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         run: pip install ".[ai]"
 
       - name: Checkout Warp upstream
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         id: upstream
         shell: bash
         run: |
           set -euo pipefail
-          REF="${{ inputs.upstream_ref }}"
+          REF="${{ steps.resolve.outputs.upstream_ref }}"
           if [ "$REF" = "main" ] \
             && ! git ls-remote --exit-code --heads "$WARP_REPO" main >/dev/null 2>&1 \
             && git ls-remote --exit-code --heads "$WARP_REPO" master >/dev/null 2>&1; then
@@ -91,8 +185,11 @@ jobs:
           }
           FULL_SHA="$(git rev-parse HEAD)"
           SHA="$(git rev-parse --short=12 HEAD)"
-          VERSION="$REF"
-          if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
+          VERSION="${{ steps.resolve.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$REF"
+          fi
+          if [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
             VERSION="${REF}-${SHA}"
           fi
           VERSION="${VERSION//\//-}"
@@ -103,6 +200,7 @@ jobs:
           echo "Using Warp $REF ($SHA), localization version $VERSION"
 
       - name: Restore i18n branch data
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           git fetch origin i18n || true
@@ -110,33 +208,35 @@ jobs:
           mkdir -p i18n
 
       - name: Extract strings
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           warpl10n extract \
             --source-root warp \
             --version "${{ steps.upstream.outputs.version }}" \
-            --scan-mode "${{ inputs.scan_mode }}" \
+            --scan-mode "${{ steps.resolve.outputs.scan_mode }}" \
             --output string.json \
             --context-output string_context.json \
             --scan-result scan_result.json
 
       - name: Prepare translation file
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "i18n/${{ steps.upstream.outputs.version }}"
-          TRANS_FILE="i18n/${{ steps.upstream.outputs.version }}/${{ inputs.target_lang }}.json"
+          TRANS_FILE="i18n/${{ steps.upstream.outputs.version }}/${{ steps.resolve.outputs.target_lang }}.json"
           if [ ! -f "$TRANS_FILE" ]; then
-            if [ -f "i18n/${{ inputs.target_lang }}.json" ]; then
-              echo "Using rolling translation memory: i18n/${{ inputs.target_lang }}.json"
-              cp "i18n/${{ inputs.target_lang }}.json" "$TRANS_FILE"
+            if [ -f "i18n/${{ steps.resolve.outputs.target_lang }}.json" ]; then
+              echo "Using rolling translation memory: i18n/${{ steps.resolve.outputs.target_lang }}.json"
+              cp "i18n/${{ steps.resolve.outputs.target_lang }}.json" "$TRANS_FILE"
             else
               BASE_FILE=""
               if git rev-parse --verify origin/i18n >/dev/null 2>&1; then
                 BASE_FILE="$(
                   {
                     git ls-tree -r --name-only origin/i18n -- i18n 2>/dev/null \
-                      | grep "/${{ inputs.target_lang }}\.json$" \
+                      | grep "/${{ steps.resolve.outputs.target_lang }}\.json$" \
                       | while read -r path; do
                           ts="$(git log -1 --format=%ct origin/i18n -- "$path" 2>/dev/null || echo 0)"
                           printf '%s\t%s\n' "$ts" "$path"
@@ -162,6 +262,7 @@ jobs:
           echo "TRANS_FILE=$TRANS_FILE" >> "$GITHUB_ENV"
 
       - name: Translate with AI
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         env:
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
@@ -175,27 +276,30 @@ jobs:
             --output "$TRANS_FILE" \
             --context string_context.json \
             --glossary config/glossary.yaml \
-            --lang "${{ inputs.target_lang }}" \
-            --mode "${{ inputs.mode }}"
+            --lang "${{ steps.resolve.outputs.target_lang }}" \
+            --mode "${{ steps.resolve.outputs.mode }}"
 
       - name: Validate translation
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           warpl10n validate --input "$TRANS_FILE"
-          cp "$TRANS_FILE" "i18n/${{ inputs.target_lang }}.json"
+          cp "$TRANS_FILE" "i18n/${{ steps.resolve.outputs.target_lang }}.json"
 
       - name: Upload translation artifact
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: warp-${{ inputs.target_lang }}-${{ steps.upstream.outputs.version }}-translation
+          name: warp-${{ steps.resolve.outputs.target_lang }}-${{ steps.upstream.outputs.version }}-translation
           path: |
             scan_result.json
             string.json
             string_context.json
-            i18n/${{ steps.upstream.outputs.version }}/${{ inputs.target_lang }}.json
+            i18n/${{ steps.upstream.outputs.version }}/${{ steps.resolve.outputs.target_lang }}.json
           retention-days: 30
 
       - name: Push i18n branch
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -221,26 +325,29 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add scan_result.json string.json string_context.json i18n/
-          git diff --cached --quiet || git commit -m "feat(i18n): update ${{ inputs.target_lang }} for ${{ steps.upstream.outputs.version }}"
+          git diff --cached --quiet || git commit -m "feat(i18n): update ${{ steps.resolve.outputs.target_lang }} for ${{ steps.upstream.outputs.version }}"
           git push origin i18n
 
       - name: Write build request
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build-request
           {
-            printf 'CHAIN_BUILD=%q\n' "${{ inputs.chain_build }}"
+            printf 'CHAIN_BUILD=%q\n' "${{ steps.resolve.outputs.chain_build }}"
             printf 'UPSTREAM_REF=%q\n' "${{ steps.upstream.outputs.sha }}"
             printf 'SOURCE_REF=%q\n' "${{ steps.upstream.outputs.ref }}"
             printf 'VERSION=%q\n' "${{ steps.upstream.outputs.version }}"
-            printf 'LANG=%q\n' "${{ inputs.target_lang }}"
-            printf 'PLATFORM=%q\n' "${{ inputs.build_platform }}"
-            printf 'PUBLISH_RELEASE=%q\n' "false"
-            printf 'BUILD_INSTALLER=%q\n' "false"
+            printf 'LANG=%q\n' "${{ steps.resolve.outputs.target_lang }}"
+            printf 'PLATFORM=%q\n' "${{ steps.resolve.outputs.build_platform }}"
+            printf 'PUBLISH_RELEASE=%q\n' "${{ steps.resolve.outputs.publish_release }}"
+            printf 'BUILD_INSTALLER=%q\n' "${{ steps.resolve.outputs.build_installer }}"
+            printf 'IS_PRERELEASE=%q\n' "${{ steps.resolve.outputs.is_prerelease }}"
           } > build-request/build-request.env
 
       - name: Upload build request artifact
+        if: ${{ steps.resolve.outputs.should_translate == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: build-request

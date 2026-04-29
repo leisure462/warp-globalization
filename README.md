@@ -11,16 +11,19 @@ Warp 汉化版自动化工程。仓库不保存 Warp 源码，而是在 GitHub A
    - `AI_RPM`：可选，默认 `60`，设为 `0` 表示不限速
    - `AI_CONCURRENCY`：可选，默认 `8`
 2. 运行 `01 Translate` 工作流：
-   - `upstream_ref` 默认 `master`，也可以填写 Warp 的 tag/commit/branch
+   - `upstream_ref` 默认 `latest`，会自动解析 Warp 上游最新 release；也可以填写 Warp 的 tag/commit/branch
    - `target_lang` 默认 `zh-CN`
    - 勾选 `chain_build` 后，翻译成功并推送 `i18n` 分支后会自动启动 `02 Build`
+   - `publish_release` 默认开启，构建成功后会用上游 release 名称发布本仓库 Release
 3. 运行 `02 Build` 工作流：
+   - `upstream_ref` 默认 `latest`，会自动拉取 Warp 最新 release
    - 默认构建 `windows-x86_64`
    - 产物会上传为 Actions Artifact
-   - 勾选 `publish_release` 会创建 GitHub Release
+   - `publish_release` 默认开启，Release tag/name 使用上游 release 名称
 
 翻译结果会提交到仓库的 `i18n` 分支，主分支只保存工具链和 Actions 配置。
 每次翻译都会同时维护 `i18n/<版本>/<语言>.json` 和 `i18n/<语言>.json`。后者作为跨版本翻译记忆，新 upstream commit 没有精确版本翻译时会自动复用它，只补翻新增或变更的字符串。
+`01 Translate` 也会按计划定时检查 Warp 最新 release；如果本仓库已经存在同名 Release，就会跳过本次翻译和构建，避免重复发布。
 
 ## 本地命令
 
@@ -36,8 +39,8 @@ warpl10n replace --input i18n/zh-CN.json --source-root warp --do-not-translate c
 
 ## 工作流
 
-- `01 Translate`：拉取 Warp、扫描候选 Rust 文件、提取字符串、AI 翻译、校验占位符、推送到 `i18n` 分支，并上传自动构建请求。
-- `02 Build`：支持手动运行，也会在 `01 Translate` 成功完成后读取构建请求自动运行；它会拉取 Warp、从 `i18n` 分支选择翻译文件、应用源码替换、生成补丁、在 GitHub runner 上构建。
+- `01 Translate`：解析 Warp 最新 release 或指定 ref、拉取 Warp、扫描候选 Rust 文件、提取字符串、AI 翻译、校验占位符、推送到 `i18n` 分支，并上传自动构建/发布请求。
+- `02 Build`：支持手动运行，也会在 `01 Translate` 成功完成后读取构建请求自动运行；它会拉取 Warp、从 `i18n` 分支选择翻译文件、应用源码替换、生成补丁、在 GitHub runner 上构建，成功后按上游 release 名称发布本仓库 Release。
 
 ## 当前策略
 

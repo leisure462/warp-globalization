@@ -1,5 +1,5 @@
 {
-    "version": "master-f0c8b7f723b7",
+    "version": "master-d0f045c01bac",
     "files": [
         "app/src/ai/agent/api.rs",
         "app/src/ai/agent/api/convert_conversation.rs",
